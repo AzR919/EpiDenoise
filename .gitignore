@@ -13,5 +13,6 @@ playground/
 candi_venv/
 logs/
 jobs/
+data/inf_debug*
 models/
 eic_paper/
