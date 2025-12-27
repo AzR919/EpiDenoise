@@ -1,6 +1,7 @@
 """
 File to prepare inputs for CANDI inference
 
+Creates the npz files per choromosome as done in CANDI runs
 """
 
 import os
@@ -26,7 +27,7 @@ ASSAYS=[
     'chipseq-control'
     ]
 
-sequencing_platforms = [
+SEQUENCING_PLATFORMS = [
     'Illumina Genome Analyzer IIx', 'Illumina Genome Analyzer',
     'Illumina Genome Analyzer IIe', 'Illumina HiSeq 2000',
     'Illumina Genome Analyzer II', 'Illumina HiSeq 4000',
@@ -34,34 +35,53 @@ sequencing_platforms = [
     'Illumina NextSeq 500'
     ]
 
-run_types = ['single-ended', 'paired-ended']
+RUN_TYPES = ['single-ended', 'paired-ended']
 
+CHR_SIZES_POSSIBLE = {
+    "chr1": 248956422,
+    "chr2": 242193529,
+    "chr3": 198295559,
+    "chr4": 190214555,
+    "chr5": 181538259,
+    "chr6": 170805979,
+    "chr7": 159345973,
+    "chr8": 145138636,
+    "chr9": 138394717,
+    "chr10": 133797422,
+    "chr11": 135086622,
+    "chr12": 133275309,
+    "chr13": 114364328,
+    "chr14": 107043718,
+    "chr15": 101991189,
+    "chr16": 90338345,
+    "chr17": 83257441,
+    "chr18": 80373285,
+    "chr19": 58617616,
+    "chr20": 64444167,
+    "chr21": 46709983,
+    "chr22": 50818468,
+    "chrX": 156040895,
+}
+
+RESOLUTION = 25
 
 # ------------------------------------------------------------------------
-# slightly modiied BAM_TO_SIGNAL
+# Input processing functions
 # ------------------------------------------------------------------------
 class BAM_TO_SIGNAL(object):
+    """
+    Slightly modified BAM_TO_SIGNAL to process input metadata as well
+    """
 
-    def __init__(self, bam_file, chr_sizes_file, input_mdata, output_mdata, resolution=25):
+    def __init__(self, bam_file, chr_sizes, input_mdata, output_mdata, resolution=RESOLUTION):
 
         self.bam_file = bam_file
         self.output_dir = os.path.join("/",*self.bam_file.split('/')[:-1])
-        self.chr_sizes_file = chr_sizes_file
+        self.chr_sizes = chr_sizes
         self.resolution = resolution
         self.bam = pysam.AlignmentFile(self.bam_file, 'rb')
         self.input_mdata = input_mdata
         self.output_mdata = output_mdata
-
-        self.read_chr_sizes()
-
-    def read_chr_sizes(self):
-        main_chrs = ["chr" + str(x) for x in range(1, 23)] + ["chrX"]
-        self.chr_sizes = {}
-        with open(self.chr_sizes_file, 'r') as f:
-            for line in f:
-                chr_name, chr_size = line.strip().split('\t')
-                if chr_name in main_chrs:
-                    self.chr_sizes[chr_name] = int(chr_size)
 
     def initialize_empty_bins(self):
         return {chr: [0] * (size // self.resolution + 1) for chr, size in self.chr_sizes.items()}
@@ -69,10 +89,10 @@ class BAM_TO_SIGNAL(object):
     def calculate_coverage_pysam(self):
         bins = self.initialize_empty_bins()
 
-        total_mapped_reads = 0 
-        bins_with_reads = 0 
+        total_mapped_reads = 0
+        bins_with_reads = 0
 
-        read_lens = [] 
+        read_lens = []
 
         paired_read_counts = 0
         single_read_counts = 0
@@ -81,7 +101,7 @@ class BAM_TO_SIGNAL(object):
             for read in self.bam.fetch(chr):
                 if read.is_unmapped:
                     continue
-                total_mapped_reads += 1  
+                total_mapped_reads += 1
                 read_lens.append(read.reference_length)
                 if read.is_paired: paired_read_counts += 1
                 else: single_read_counts += 1
@@ -89,12 +109,12 @@ class BAM_TO_SIGNAL(object):
                 start_bin = read.reference_start // self.resolution
                 end_bin = read.reference_end // self.resolution
                 for i in range(start_bin, end_bin + 1):
-                    if bins[chr][i] == 0:  
-                        bins_with_reads += 1  
+                    if bins[chr][i] == 0:
+                        bins_with_reads += 1
                     bins[chr][i] += 1
-        
+
         # Calculate coverage as the percentage of bins with at least one read
-        total_bins = sum(len(b) for b in bins.values())  
+        total_bins = sum(len(b) for b in bins.values())
         coverage = (bins_with_reads / total_bins) if total_bins > 0 else 0
 
         mean_read_len = np.mean(np.array(read_lens))
@@ -103,7 +123,7 @@ class BAM_TO_SIGNAL(object):
         return bins, total_mapped_reads, coverage, mean_read_len, bam_is_paired
 
     def save_signal_metadata(self, depth, mean_read_len, bam_is_paired):
-        
+
         file_name = os.path.join(self.output_dir, "input_metadata.json")
         mdict = {
             "depth":depth,
@@ -116,13 +136,13 @@ class BAM_TO_SIGNAL(object):
             json.dump(mdict, file, indent=4)
 
         file_name = os.path.join(self.output_dir, "output_metadata.json")
-        mdict = {# TODO: get proper output metadata
+        mdict = {
             "depth":depth,
             "sequencing_platform":self.output_mdata["sequencing_platform"],
             "mean_read_len":mean_read_len,
             "run_type":self.output_mdata["run_type"],
             }
-        
+
         mdict.update(self.output_mdata)
 
         with open(file_name, 'w') as file:
@@ -133,7 +153,7 @@ class BAM_TO_SIGNAL(object):
         for chr, data in bins.items():
             file_name = os.path.join(self.output_dir, f"{chr}.npz")
             np.savez_compressed(file_name, np.array(data))
-    
+
     def full_preprocess(self):
 
         data, depth, _, mean_read_len, bam_is_paired = self.calculate_coverage_pysam()
@@ -143,12 +163,12 @@ class BAM_TO_SIGNAL(object):
 # ------------------------------------------------------------------------
 # Load data
 # ------------------------------------------------------------------------
-def process_bam(bam_file, input_mdata, output_mdata):
-    # Process BAM to signals using existing BAM_TO_SIGNAL
+# TODO: metadata
+def process_bam(bam_file, input_mdata, output_mdata, chr_sizes):
 
     bam_processor = BAM_TO_SIGNAL(
         bam_file=bam_file,
-        chr_sizes_file="./data/inf_debug_hg38.chrom.sizes", #TODO: know where to get these sizes from
+        chr_sizes=chr_sizes,
         input_mdata=input_mdata,
         output_mdata=output_mdata
     )
@@ -159,31 +179,63 @@ def process_bam(bam_file, input_mdata, output_mdata):
         os.remove(f"{bam_file}.bai")
 
 def process_metadata(metadata):
-    # TODO: metadata. only seq_plat is left
 
     seq_platform = metadata["sequencing_platform"]
     try:
-        index = sequencing_platforms.index(seq_platform) + 1
+        index = SEQUENCING_PLATFORMS.index(seq_platform) + 1
     except:
         index = 0
     metadata["sequencing_platform"] = index
 
     run_type = metadata["run_type"]
     try:
-        index = run_types.index(run_type)
+        index = RUN_TYPES.index(run_type)
     except:
         index = -1
     metadata["run_type"] = index
 
-def process_input_data(bios_path, temp_path):
+def process_chr_sizes(chromosomes):
+    """
+    Prepares the sizes of chromosome that will be processes
 
-    os.makedirs(temp_path, exist_ok=True)
+    @args
+        - chromosomes (str list): user given list of chromosomes
+    @rets
+        - chr_size (str:int dict): sizes of choromosome to be processed
+    """
 
-    exps = os.listdir(bios_path)
+    chr_possible = CHR_SIZES_POSSIBLE.keys()
+    chr_sizes = {}
 
-    for exp in exps:
+    for chr in chromosomes:
 
-        assert exp in ASSAYS
+        if not (chr in chr_possible or f"chr{chr}" in chr_possible):
+            print(f"Given chromosome: {chr}, is out of scope. Skipping")
+            continue
+
+        # Turn int only into fullname
+        chr = f"chr{chr}" if chr[:3] != "chr" else chr
+        chr_sizes[chr] = CHR_SIZES_POSSIBLE[chr]
+
+    assert len(chr_sizes) != 0, "Need atleast one correct chromosome to process"
+
+    return chr_sizes
+
+def process_input_data(bios_path, temp_path, chromosomes):
+    """
+    Iterates over the given bios folder and generates preprocessed data
+    """
+
+    chr_sizes = process_chr_sizes(chromosomes)
+    given_exps = os.listdir(bios_path)
+
+    processed_assays = 0
+
+    for exp in given_exps:
+
+        if exp not in ASSAYS:
+            print(f"Unsupported assay {exp}. Skipping")
+            continue
 
         exp_path = os.path.join(bios_path, exp)
         temp_exp_path = os.path.join(temp_path, exp)
@@ -202,7 +254,7 @@ def process_input_data(bios_path, temp_path):
 
         output_mdata_path = os.path.join(exp_path, "output_metadata.json")
         try:
-            with open(output_mdata_path) as f:  
+            with open(output_mdata_path) as f:
                 output_mdata = json.load(f)
         except:
             output_mdata = {
@@ -211,16 +263,25 @@ def process_input_data(bios_path, temp_path):
             }
         process_metadata(output_mdata)
 
-        for file in os.listdir(exp_path):
+        # Get the first bam file
+        bam_file = next((f for f in os.listdir(exp_path) if f.endswith('.bam')), None)
+        if bam_file is None:
+            print(f".bam file not found in path: {exp_path}. Skipping")
+            continue
 
-            if file.endswith(".bam"):
+        # copy it to temp path and then process
+        file_path = os.path.join(exp_path,bam_file)
+        temp_file_path = os.path.join(temp_exp_path,bam_file)
+        shutil.copy2(file_path, temp_file_path)
+        pysam.index(temp_file_path)
 
-                file_path = os.path.join(exp_path,file)
-                temp_file_path = os.path.join(temp_exp_path,file)
-                shutil.copy2(file_path, temp_file_path)
-                pysam.index(temp_file_path)
+        process_bam(temp_file_path, input_mdata, output_mdata, chr_sizes)
 
-                process_bam(temp_file_path, input_mdata, output_mdata)
+        processed_assays += 1
+
+    assert processed_assays > 0, f"Need at least one supported assay to work with."
+
+    return chr_sizes
 
 # ------------------------------------------------------------------------
 # Load model
@@ -228,6 +289,7 @@ def process_input_data(bios_path, temp_path):
 
 def load_candi_predictor(model_path):
 
+    # suppress output
     with contextlib.redirect_stdout(None):
         model = CANDIPredictor(model_path)
 

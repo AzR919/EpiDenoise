@@ -16,9 +16,11 @@
                 "-D",
                 "--data_path", "/home/azr/lab/candix/data/test_input/test_bs",
                 "--temp_path", "/home/azr/lab/candix/data/test_temp",
-                "--model_path", "/home/azr/lab/candix/saved_model",
+                "--model_path", "/home/azr/projects/def-maxwl/share/candi/20251208_235716_CANDI_eic_full_chr_5000loci_Dec08_EIC_Chr19_LC_LayerNorm_Adamax",
                 "--fasta_path", "/home/azr/lab/candix/EpiDenoise/data/hg38.fa",
                 "--output_path", "/home/azr/lab/candix/data/test_output",
+                "--save_extra", "s",
+                "--chromosomes", "11", "19", "512",
             ]
         },
         {

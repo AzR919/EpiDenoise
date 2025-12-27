@@ -1,10 +1,15 @@
 """
-Main file for CANDI inference
+Main file for CANDI inference,
+Imputation and denoising assays
 
+Takes in a bam file of given assays.
+Make a temporary directory to save intermediate results of all assays.
+Save the requested assays and the lower and upper bounds.
 """
 
 import os
 import sys
+import shutil
 from pathlib import Path
 
 Project_DIR = Path(__file__).parents[1].resolve()
@@ -20,7 +25,7 @@ def inf_arg_parser():
     """
 
     parser = argparse.ArgumentParser(
-        description="CANDI: Context-Aware Neural Data Imputation - Modern Inference Interface",
+        description="CANDI: Context-Aware Neural Data Imputation - Inference Interface",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
                 TODO: add examples here
@@ -28,55 +33,70 @@ def inf_arg_parser():
 
     # === DATA CONFIGURATION ===
     data_group = parser.add_argument_group('Data Configuration')
-    data_group.add_argument('--data_path', type=str, default="./",
-                            help='Path to the input folder.\n' \
-                            'Folder should be set as follows:\n' \
-                            './<BIO_SAMPLE>/<ASSAY>/<BAM>+<INPUT_MD>.TODO: make this better')
-    data_group.add_argument('--model_path', type=str, default="./",
-                            help='Path to the model')
+    data_group.add_argument('--data_path', type=str, required=True,
+                            help='Path to the input directory.\n' \
+                            'Directory should be set as follows:\n' \
+                            '<Given_Path>/<ASSAY>/<BAM>.bam')
+    data_group.add_argument('--model_path', type=str, required=True,
+                            help='Path to the model provided by CANDI.\n' \
+                            'Either a model file or a directory')
     data_group.add_argument('--output_path', type=str, default="./",
-                            help='Path to the outputs')
+                            help='Path to the output directory.')
     data_group.add_argument('--temp_path', type=str, default="./temp",
                             help='Path to the temporary folder to save intermediate work.' \
                             'Deleted afterwards')
     data_group.add_argument('--fasta_path', type=str, default="./temp/fasta.fa",
-                            help='Path to the fasta file to be used. The standarad hg38.fa')
+                            help='Path to the fasta file to be used. The standarad hg38.fa\n' \
+                            'If it does not exist it will be downloaded and save in this directory')
+    data_group.add_argument('--assays', type=str, nargs="+", default=[],
+                            help='The assays to save. Default is all assays.\n'\
+                                'For the list of available assays, look at README')
+    data_group.add_argument('--chromosomes', type=str, nargs="+", default=["chr19"],
+                            help='The chromosomes to process. possible choices: 1 to 22 and X.\n'\
+                                'eg: "chr19 chr20" or "19 20"')
 
     # === SYSTEM CONFIGURATION ===
+    # TODO: Wait on Mehdi to finish this
     system_group = parser.add_argument_group('System Configuration')
     system_group.add_argument('--device', type=str, default=None,
                              help='Device to use (cuda:0, cpu, etc.). Auto-detect if not specified')
     system_group.add_argument('--check_gpus', action='store_true',
                              help='Check GPU availability and exit')
 
-    # === CONFIGURATION FILE ===
-    config_group = parser.add_argument_group('Configuration')
-    config_group.add_argument('--config', type=str, default=None,
-                             help='Path to YAML/JSON configuration file')
-    config_group.add_argument('--save-config', type=str, default=None,
-                             help='Save current configuration to file')
-
     # === ADVANCED OPTIONS ===
     advanced_group = parser.add_argument_group('Advanced Options')
-    advanced_group.add_argument('--dsf-list', type=int, nargs='+', default=[1, 2],
-                               help='Downsampling factors to use')
     advanced_group.add_argument('--debug', '-D', action='store_true',
                                help='Enable debug mode with extra logging')
+    advanced_group.add_argument('--save_extra', type=str, default="",
+                               help='How much extra information needs to be saved.\n' \
+                                'Default: save the mean.\n' \
+                                '"s": save the confidence intervals as well.')
+    advanced_group.add_argument('--confidence', type=int, default="95",
+                               help='The confidence interval to save with')
 
     return parser.parse_args()
 
 def main():
 
     args = inf_arg_parser()
+    os.makedirs(args.temp_path, exist_ok=True)
+    os.makedirs(args.output_path, exist_ok=True)
 
-    process_input_data(args.data_path, args.temp_path) #if not args.debug else None
-
+    # setup
+    chr_sizes = process_input_data(args.data_path, args.temp_path, args.chromosomes)
     model = load_candi_predictor(args.model_path)
 
-    run_through_model(args, model)
+    # process
+    run_through_model(args, model, chr_sizes)
+
+    #cleanup
+    if not args.debug: shutil.rmtree(args.temp_path)
 
     return
 
+# ------------------------------------------------------------------------
+# Extra stuff
+# ------------------------------------------------------------------------
 # TODO: remove
 def tester():
     # download_url = f"https://www.encodeproject.org/files/ENCFF282ZSZ/@@download/ENCFF282ZSZ.bam"
